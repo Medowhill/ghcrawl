@@ -1,0 +1,13 @@
+[package]
+name = "ghcrawl"
+version = "1.0.0"
+edition = "2021"
+authors = ["Jaemin Hong <hjm0901@gmail.com>"]
+
+[dependencies]
+reqwest = { version = "0.12.4", features = ["json"] }
+tokio = { version = "1.37.0", features = ["full"] }
+clap = { version = "4.5.4", features = ["derive"] }
+serde = { version = "1.0.201", features = ["derive"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.17"
