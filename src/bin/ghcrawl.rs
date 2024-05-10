@@ -1,3 +1,4 @@
+use futures::stream::StreamExt;
 use std::{fs::File, path::PathBuf};
 
 use clap::Parser;
@@ -27,8 +28,24 @@ async fn main() {
 
     let token = std::fs::read_to_string(args.token_file).unwrap();
     let api = github_api::GithubApi::new(token.trim().to_string());
-    let repos = api.get_repositories_at_page(10000, 20000, "c", 1).await;
-    for repo in repos {
+    let mut repos = api.repository_stream(1000, 2000, "c");
+    while let Some(repo) = repos.next().await {
         println!("{}: {}", repo.full_name, repo.stargazers_count);
     }
+    // let repos = api.get_repositories_between_stars(10000, 11000, "c").await;
+    // for repo in repos {
+    //     println!("{}: {}", repo.full_name, repo.stargazers_count);
+    //     let langs = api.get_repository_languages(&repo.full_name).await;
+    //     println!("{:?}", langs);
+    //     let total_bytes = langs.values().sum::<usize>();
+    //     if langs["C"] * 2 < total_bytes {
+    //         continue;
+    //     }
+    //     let occurrences = api.get_occurrences(&repo.full_name, "c", "union").await;
+    //     if occurrences.len() == 0 {
+    //         continue;
+    //     }
+    //     println!("{:?}", occurrences);
+    //     break;
+    // }
 }
