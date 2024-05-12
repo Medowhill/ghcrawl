@@ -1,13 +1,14 @@
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::future::Future;
 
 use reqwest::{header, Client, Response};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tracing::info;
+
+const PER_PAGE: usize = 100;
 
 pub struct GithubApi {
     client: Client,
@@ -25,24 +26,20 @@ pub struct Repository {
 }
 
 #[derive(Deserialize)]
-struct Collection<T> {
-    items: Vec<T>,
+pub struct Page<T> {
+    pub items: Vec<T>,
 }
 
-pub struct RepositoryStream<'a> {
-    stream: Box<dyn Stream<Item = Repository> + 'a>,
-    _phantom: std::marker::PhantomData<&'a GithubApi>,
+pub struct OccurrenceQuery {
+    pub repo: String,
+    pub lang: String,
+    pub token: String,
 }
 
-impl Stream for RepositoryStream<'_> {
-    type Item = Repository;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        unsafe {
-            let stream = Pin::new_unchecked(self.get_mut().stream.as_mut());
-            stream.poll_next(cx)
-        }
-    }
+pub struct RepositoryQuery {
+    pub min_stars: usize,
+    pub max_stars: usize,
+    pub lang: String,
 }
 
 enum ApiResult<T> {
@@ -63,71 +60,61 @@ impl GithubApi {
         Self { client }
     }
 
-    pub async fn get_occurrences(&self, repo: &str, lang: &str, tok: &str) -> Vec<Occurrence> {
-        let q = format!("{} repo:{} language:{}", tok, repo, lang);
-        let params = [("q", q.as_str()), ("per_page", "100")];
-        let occurrences: Collection<Occurrence> =
-            self.get("search/code".to_string(), &params).await;
-        occurrences.items
-    }
-
     pub async fn get_repository_languages(&self, repo: &str) -> HashMap<String, usize> {
         let path = format!("repos/{}/languages", repo);
         self.get::<_, &str, &str>(path, &[]).await
     }
 
-    pub fn repository_stream<'a>(
+    pub fn get_occurrence_stream<'a>(
         &'a self,
-        min_stars: usize,
-        max_stars: usize,
-        lang: &'a str,
-    ) -> RepositoryStream<'a> {
-        let repos = futures::stream::unfold(Some(1usize), move |page| async move {
-            let page = page?;
-            let repos = self
-                .get_repositories_at_page(min_stars, max_stars, lang, page)
-                .await;
-            let next = if repos.len() < 100 {
-                None
-            } else {
-                Some(page + 1)
-            };
-            Some((repos, next))
-        })
-        .map(futures::stream::iter)
-        .flatten();
-        RepositoryStream {
-            stream: Box::new(repos),
-            _phantom: std::marker::PhantomData,
-        }
+        q: &'a OccurrenceQuery,
+    ) -> impl Stream<Item = Occurrence> + 'a {
+        page_stream(q, |q, page| self.get_occurrences_at_page(q, page))
+    }
+
+    pub async fn get_occurrences_at_page(
+        &self,
+        q: &OccurrenceQuery,
+        page: usize,
+    ) -> Page<Occurrence> {
+        let q = format!("{} repo:{} language:{}", q.token, q.repo, q.lang);
+        let params = [
+            ("q", q.as_str()),
+            ("page", &page.to_string()),
+            ("per_page", &PER_PAGE.to_string()),
+        ];
+        self.get("search/code".to_string(), &params).await
+    }
+
+    pub fn get_repository_stream<'a>(
+        &'a self,
+        q: &'a RepositoryQuery,
+    ) -> impl Stream<Item = Repository> + 'a {
+        page_stream(q, |q, page| self.get_repositories_at_page(q, page))
     }
 
     pub async fn get_repositories_at_page(
         &self,
-        min_stars: usize,
-        max_stars: usize,
-        lang: &str,
+        q: &RepositoryQuery,
         page: usize,
-    ) -> Vec<Repository> {
+    ) -> Page<Repository> {
         info!(
             "Getting repositories with stars between {} and {} and language {} at page {}",
-            min_stars, max_stars, lang, page
+            q.min_stars, q.max_stars, q.lang, page
         );
         let q = format!(
             "stars:{}..{} language:{}",
-            min_stars,
-            max_stars,
-            lang.to_lowercase()
+            q.min_stars,
+            q.max_stars,
+            q.lang.to_lowercase()
         );
         let params = [
             ("q", q.as_str()),
             ("order", "stars"),
             ("page", &page.to_string()),
-            ("per_page", "100"),
+            ("per_page", &PER_PAGE.to_string()),
         ];
-        let repos: Collection<Repository> =
-            self.get("search/repositories".to_string(), &params).await;
-        repos.items
+        self.get("search/repositories".to_string(), &params).await
     }
 
     async fn get<T, K, V>(&self, path: String, params: &[(K, V)]) -> T
@@ -182,6 +169,28 @@ impl GithubApi {
             }
         }
     }
+}
+
+#[inline]
+fn page_stream<'a, Q, R, Fut, F>(query: &'a Q, f: F) -> impl Stream<Item = R> + 'a
+where
+    Q: 'a,
+    R: 'a,
+    Fut: Future<Output = Page<R>> + 'a,
+    F: Copy + Fn(&'a Q, usize) -> Fut + 'a,
+{
+    futures::stream::unfold(Some(1usize), move |page| async move {
+        let page = page?;
+        let vs = f(query, page).await;
+        let next = if vs.items.len() < PER_PAGE {
+            None
+        } else {
+            Some(page + 1)
+        };
+        Some((vs.items, next))
+    })
+    .map(futures::stream::iter)
+    .flatten()
 }
 
 fn get_reset(res: &Response) -> u64 {

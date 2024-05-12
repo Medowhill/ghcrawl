@@ -1,4 +1,4 @@
-use futures::stream::StreamExt;
+use futures::{pin_mut, stream::StreamExt};
 use std::{fs::File, path::PathBuf};
 
 use clap::Parser;
@@ -28,7 +28,13 @@ async fn main() {
 
     let token = std::fs::read_to_string(args.token_file).unwrap();
     let api = github_api::GithubApi::new(token.trim().to_string());
-    let mut repos = api.repository_stream(1000, 2000, "c");
+    let repo_query = github_api::RepositoryQuery {
+        min_stars: 1000,
+        max_stars: 2000,
+        lang: "c".to_string(),
+    };
+    let repos = api.get_repository_stream(&repo_query);
+    pin_mut!(repos);
     while let Some(repo) = repos.next().await {
         println!("{}: {}", repo.full_name, repo.stargazers_count);
     }
