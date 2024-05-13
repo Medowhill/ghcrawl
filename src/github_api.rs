@@ -16,12 +16,18 @@ pub struct GithubApi {
     client: Client,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+pub struct FileContent {
+    pub encoding: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
 pub struct Occurrence {
     pub path: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
 pub struct Repository {
     pub full_name: String,
     pub stargazers_count: usize,
@@ -69,6 +75,12 @@ impl GithubApi {
     pub async fn get_repository_languages(&self, repo: &str) -> HashMap<String, usize> {
         let path = format!("repos/{}/languages", repo);
         self.get::<_, &str, &str>(path, &[]).await
+    }
+
+    pub async fn get_file_content(&self, repo: &str, path: &str) {
+        let path = format!("repos/{}/contents/{}", repo, path);
+        let content: FileContent = self.get::<_, &str, &str>(path, &[]).await;
+        println!("{:?}", content);
     }
 
     pub fn get_occurrence_stream<'a>(

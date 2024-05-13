@@ -1,9 +1,5 @@
-use etrace::some_or;
 use futures::{pin_mut, stream::StreamExt};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use clap::Parser;
 
@@ -45,12 +41,14 @@ async fn main() {
             full_name,
             stargazers_count,
         } = repo;
+
         let langs = api.get_repository_languages(&full_name).await;
         let total_bytes = langs.values().sum::<usize>();
         if langs["C"] * 2 < total_bytes {
             continue;
         }
-        let occurrence_query = github_api::OccurrenceQuery {
+
+        let mut occurrence_query = github_api::OccurrenceQuery {
             repo: &full_name,
             path: None,
             filename: None,
@@ -59,36 +57,24 @@ async fn main() {
         };
         let occurrences = api.get_occurrence_stream(occurrence_query);
         pin_mut!(occurrences);
-        let occurrences = occurrences.collect::<Vec<_>>().await;
+        let mut occurrences = occurrences.collect::<Vec<_>>().await;
         if occurrences.is_empty() {
             continue;
         }
-        let mut paths = vec![];
-        for occurrence in &occurrences {
-            let path = Path::new(&occurrence.path);
-            let dir = some_or!(path.parent(), continue);
-            let dir = some_or!(dir.as_os_str().to_str(), continue);
-            let file = some_or!(path.file_name(), continue);
-            let file = some_or!(file.to_str(), continue);
-            let occurrence_query = github_api::OccurrenceQuery {
-                repo: &full_name,
-                path: Some(dir),
-                filename: Some(file),
-                lang: "c",
-                token: "type",
-            };
-            let occurrences = api.get_occurrence_stream(occurrence_query);
-            pin_mut!(occurrences);
-            let occurrences = occurrences.collect::<Vec<_>>().await;
-            if !occurrences.is_empty() {
-                paths.push(&occurrence.path);
-            }
+
+        occurrence_query.token = "type";
+        let type_occurrences = api.get_occurrence_stream(occurrence_query);
+        pin_mut!(type_occurrences);
+        let type_occurrences = type_occurrences.collect::<HashSet<_>>().await;
+
+        occurrences.retain(|occurrence| type_occurrences.contains(occurrence));
+        if occurrences.is_empty() {
+            continue;
         }
-        if !paths.is_empty() {
-            println!("{}: {}", full_name, stargazers_count);
-            for path in paths {
-                println!("  {}", path);
-            }
+
+        println!("{}: {}", full_name, stargazers_count);
+        for occurrence in occurrences {
+            println!("  {}", occurrence.path);
         }
     }
 }
