@@ -77,10 +77,9 @@ impl GithubApi {
         self.get::<_, &str, &str>(path, &[]).await
     }
 
-    pub async fn get_file_content(&self, repo: &str, path: &str) {
+    pub async fn get_file_content(&self, repo: &str, path: &str) -> FileContent {
         let path = format!("repos/{}/contents/{}", repo, path);
-        let content: FileContent = self.get::<_, &str, &str>(path, &[]).await;
-        println!("{:?}", content);
+        self.get::<_, &str, &str>(path, &[]).await
     }
 
     pub fn get_occurrence_stream<'a>(
@@ -228,7 +227,7 @@ where
     futures::stream::unfold(Some(1usize), move |page| async move {
         let page = page?;
         let vs = f(query, page).await;
-        let next = if vs.items.len() < PER_PAGE {
+        let next = if page == 10 || vs.items.len() < PER_PAGE {
             None
         } else {
             Some(page + 1)

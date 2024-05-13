@@ -345,6 +345,7 @@ dependencies = [
 name = "ghcrawl"
 version = "1.0.0"
 dependencies = [
+ "base64",
  "clap",
  "futures",
  "reqwest",

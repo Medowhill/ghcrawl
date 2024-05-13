@@ -1,5 +1,6 @@
+use base64::prelude::*;
 use futures::{pin_mut, stream::StreamExt};
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{fs::File, path::PathBuf};
 
 use clap::Parser;
 
@@ -44,11 +45,12 @@ async fn main() {
 
         let langs = api.get_repository_languages(&full_name).await;
         let total_bytes = langs.values().sum::<usize>();
-        if langs["C"] * 2 < total_bytes {
+        let c_bytes = langs["C"];
+        if c_bytes * 2 < total_bytes {
             continue;
         }
 
-        let mut occurrence_query = github_api::OccurrenceQuery {
+        let occurrence_query = github_api::OccurrenceQuery {
             repo: &full_name,
             path: None,
             filename: None,
@@ -57,24 +59,25 @@ async fn main() {
         };
         let occurrences = api.get_occurrence_stream(occurrence_query);
         pin_mut!(occurrences);
-        let mut occurrences = occurrences.collect::<Vec<_>>().await;
-        if occurrences.is_empty() {
-            continue;
+
+        let mut has_tagged_union = false;
+        while let Some(occurrence) = occurrences.next().await {
+            let content = api.get_file_content(&full_name, &occurrence.path).await;
+            assert_eq!(content.encoding, "base64");
+            let content = content.content.replace("\n", "");
+            let content = BASE64_STANDARD.decode(content).unwrap();
+            let content = String::from_utf8(content).unwrap();
+            if content.contains("struct ")
+                && content.contains(" type;")
+                && content.contains("  union {")
+            {
+                has_tagged_union = true;
+                break;
+            }
         }
 
-        occurrence_query.token = "type";
-        let type_occurrences = api.get_occurrence_stream(occurrence_query);
-        pin_mut!(type_occurrences);
-        let type_occurrences = type_occurrences.collect::<HashSet<_>>().await;
-
-        occurrences.retain(|occurrence| type_occurrences.contains(occurrence));
-        if occurrences.is_empty() {
-            continue;
-        }
-
-        println!("{}: {}", full_name, stargazers_count);
-        for occurrence in occurrences {
-            println!("  {}", occurrence.path);
+        if has_tagged_union {
+            println!("{} {} {}", full_name, stargazers_count, c_bytes);
         }
     }
 }
