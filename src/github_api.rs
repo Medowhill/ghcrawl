@@ -2,6 +2,8 @@ use futures::stream::Stream;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::future::Future;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use reqwest::{header, Client, Response};
 use serde::de::DeserializeOwned;
@@ -30,16 +32,20 @@ pub struct Page<T> {
     pub items: Vec<T>,
 }
 
-pub struct OccurrenceQuery {
-    pub repo: String,
-    pub lang: String,
-    pub token: String,
+#[derive(Clone, Copy)]
+pub struct OccurrenceQuery<'a> {
+    pub repo: &'a str,
+    pub path: Option<&'a str>,
+    pub filename: Option<&'a str>,
+    pub lang: &'static str,
+    pub token: &'static str,
 }
 
+#[derive(Clone, Copy)]
 pub struct RepositoryQuery {
     pub min_stars: usize,
     pub max_stars: usize,
-    pub lang: String,
+    pub lang: &'static str,
 }
 
 enum ApiResult<T> {
@@ -67,17 +73,30 @@ impl GithubApi {
 
     pub fn get_occurrence_stream<'a>(
         &'a self,
-        q: &'a OccurrenceQuery,
+        q: OccurrenceQuery<'a>,
     ) -> impl Stream<Item = Occurrence> + 'a {
         page_stream(q, |q, page| self.get_occurrences_at_page(q, page))
     }
 
     pub async fn get_occurrences_at_page(
         &self,
-        q: &OccurrenceQuery,
+        q: OccurrenceQuery<'_>,
         page: usize,
     ) -> Page<Occurrence> {
-        let q = format!("{} repo:{} language:{}", q.token, q.repo, q.lang);
+        let path = if let Some(path) = q.path {
+            format!(" path:{}", path)
+        } else {
+            "".to_string()
+        };
+        let filename = if let Some(filename) = q.filename {
+            format!(" filename:{}", filename)
+        } else {
+            "".to_string()
+        };
+        let q = format!(
+            "{} repo:{} language:{}{}{}",
+            q.token, q.repo, q.lang, path, filename
+        );
         let params = [
             ("q", q.as_str()),
             ("page", &page.to_string()),
@@ -86,22 +105,37 @@ impl GithubApi {
         self.get("search/code".to_string(), &params).await
     }
 
-    pub fn get_repository_stream<'a>(
-        &'a self,
-        q: &'a RepositoryQuery,
-    ) -> impl Stream<Item = Repository> + 'a {
+    pub fn get_repository_stream(
+        &self,
+        mut q: RepositoryQuery,
+    ) -> impl Stream<Item = Repository> + '_ {
+        let min_stars = q.min_stars;
+        let max_stars = q.max_stars;
+        futures::stream::unfold(max_stars, move |max_stars| async move {
+            q.max_stars = max_stars;
+            q.min_stars = max_stars / 2;
+            if q.min_stars < min_stars {
+                None
+            } else {
+                let repos = self.get_repository_with_stars_stream(q);
+                Some((repos, q.min_stars))
+            }
+        })
+        .flatten()
+    }
+
+    pub fn get_repository_with_stars_stream(
+        &self,
+        q: RepositoryQuery,
+    ) -> impl Stream<Item = Repository> + '_ {
         page_stream(q, |q, page| self.get_repositories_at_page(q, page))
     }
 
     pub async fn get_repositories_at_page(
         &self,
-        q: &RepositoryQuery,
+        q: RepositoryQuery,
         page: usize,
     ) -> Page<Repository> {
-        info!(
-            "Getting repositories with stars between {} and {} and language {} at page {}",
-            q.min_stars, q.max_stars, q.lang, page
-        );
         let q = format!(
             "stars:{}..{} language:{}",
             q.min_stars,
@@ -172,12 +206,12 @@ impl GithubApi {
 }
 
 #[inline]
-fn page_stream<'a, Q, R, Fut, F>(query: &'a Q, f: F) -> impl Stream<Item = R> + 'a
+fn page_stream<'a, Q, R, Fut, F>(query: Q, f: F) -> impl Stream<Item = R> + 'a
 where
-    Q: 'a,
+    Q: Copy + 'a,
     R: 'a,
     Fut: Future<Output = Page<R>> + 'a,
-    F: Copy + Fn(&'a Q, usize) -> Fut + 'a,
+    F: Copy + Fn(Q, usize) -> Fut + 'a,
 {
     futures::stream::unfold(Some(1usize), move |page| async move {
         let page = page?;
@@ -197,6 +231,13 @@ fn get_reset(res: &Response) -> u64 {
     res.headers()
         .get("X-RateLimit-Reset")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1)
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|v| {
+            v - SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        })
+        .unwrap_or(0)
+        + 1
 }
