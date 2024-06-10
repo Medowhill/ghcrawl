@@ -1,3 +1,4 @@
+use etrace::ok_or;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
@@ -58,6 +59,7 @@ enum ApiResult<T> {
     Success(T),
     RateLimit(u64),
     SecondaryLimit,
+    Error,
 }
 
 impl GithubApi {
@@ -116,10 +118,7 @@ impl GithubApi {
         self.get("search/code".to_string(), &params).await
     }
 
-    pub fn get_repositories(
-        &self,
-        mut q: RepositoryQuery,
-    ) -> impl Stream<Item = Repository> + '_ {
+    pub fn get_repositories(&self, mut q: RepositoryQuery) -> impl Stream<Item = Repository> + '_ {
         let min_stars = q.min_stars;
         let max_stars = q.max_stars;
         futures::stream::unfold(max_stars, move |max_stars| async move {
@@ -194,6 +193,10 @@ impl GithubApi {
                     info!("Secondary limit exceeded, waiting for 60 seconds");
                     60
                 }
+                ApiResult::Error => {
+                    info!("Error, waiting for 60 seconds");
+                    60
+                }
             };
             tokio::time::sleep(tokio::time::Duration::from_secs(wait)).await;
         }
@@ -201,12 +204,12 @@ impl GithubApi {
 
     async fn try_get_from_url<T: DeserializeOwned>(&self, url: &str) -> ApiResult<T> {
         info!("GET {}", url);
-        let response = self.client.get(url).send().await.unwrap();
+        let response = ok_or!(self.client.get(url).send().await, return ApiResult::Error);
         if response.status().is_success() {
-            ApiResult::Success(response.json().await.unwrap())
+            ApiResult::Success(ok_or!(response.json().await, return ApiResult::Error))
         } else {
             let reset = get_reset(&response);
-            let text = response.text().await.unwrap();
+            let text = ok_or!(response.text().await, return ApiResult::Error);
             if text.contains("secondary") {
                 ApiResult::SecondaryLimit
             } else {

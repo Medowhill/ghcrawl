@@ -64,7 +64,7 @@ async fn main() {
         while let Some(occurrence) = occurrences.next().await {
             let content = api.get_file_content(&full_name, &occurrence.path).await;
             assert_eq!(content.encoding, "base64");
-            let content = content.content.replace("\n", "");
+            let content = content.content.replace('\n', "");
             let content = BASE64_STANDARD.decode(content).unwrap();
             let content = String::from_utf8(content).unwrap();
             if content.contains("struct ")
