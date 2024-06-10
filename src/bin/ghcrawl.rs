@@ -35,7 +35,7 @@ async fn main() {
         max_stars: 128000,
         lang: "c",
     };
-    let repos = api.get_repository_stream(repo_query);
+    let repos = api.get_repositories_with_stars(repo_query);
     pin_mut!(repos);
     while let Some(repo) = repos.next().await {
         let github_api::Repository {
@@ -57,7 +57,7 @@ async fn main() {
             lang: "c",
             token: "union",
         };
-        let occurrences = api.get_occurrence_stream(occurrence_query);
+        let occurrences = api.get_occurrences(occurrence_query);
         pin_mut!(occurrences);
 
         let mut has_tagged_union = false;

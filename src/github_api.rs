@@ -82,7 +82,7 @@ impl GithubApi {
         self.get::<_, &str, &str>(path, &[]).await
     }
 
-    pub fn get_occurrence_stream<'a>(
+    pub fn get_occurrences<'a>(
         &'a self,
         q: OccurrenceQuery<'a>,
     ) -> impl Stream<Item = Occurrence> + 'a {
@@ -116,7 +116,7 @@ impl GithubApi {
         self.get("search/code".to_string(), &params).await
     }
 
-    pub fn get_repository_stream(
+    pub fn get_repositories(
         &self,
         mut q: RepositoryQuery,
     ) -> impl Stream<Item = Repository> + '_ {
@@ -128,14 +128,14 @@ impl GithubApi {
             if q.min_stars < min_stars {
                 None
             } else {
-                let repos = self.get_repository_with_stars_stream(q);
+                let repos = self.get_repositories_with_stars(q);
                 Some((repos, q.min_stars))
             }
         })
         .flatten()
     }
 
-    pub fn get_repository_with_stars_stream(
+    pub fn get_repositories_with_stars(
         &self,
         q: RepositoryQuery,
     ) -> impl Stream<Item = Repository> + '_ {
@@ -224,7 +224,7 @@ where
     Fut: Future<Output = Page<R>> + 'a,
     F: Copy + Fn(Q, usize) -> Fut + 'a,
 {
-    futures::stream::unfold(Some(1usize), move |page| async move {
+    futures::stream::unfold(Some(1), move |page| async move {
         let page = page?;
         let vs = f(query, page).await;
         let next = if page == 10 || vs.items.len() < PER_PAGE {
